@@ -56,7 +56,7 @@ export const initSocket = (server: import("http").Server): Server => {
     const userId = (socket.data as { userId: string }).userId;
 
     console.log("Connected: " + userId);
-
+    
     socket.join(`user:${userId}`);
 
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
