@@ -95,7 +95,6 @@ export const sendRequest = async (myId: string, targetId: string) => {
 
   try {
     getSocketInstance()
-      // Emit đến cả hai: receiver thấy request mới, actor update UI của mình
       .to(`user:${targetId}`)
       .to(`user:${myId}`)
       .emit("friend_request_sent", { friendship, sender: me });
