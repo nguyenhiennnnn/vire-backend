@@ -1,7 +1,5 @@
 import { FriendStatus } from "../../prisma/generated/prisma/enums";
 import { prisma } from "../../lib/prisma";
-import { createAndEmitNotification } from "../../services/notification.service";
-import { getSocketInstance } from "../../socket";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
 
@@ -72,36 +70,6 @@ export const sendRequest = async (myId: string, targetId: string) => {
       throw new AppError(403, "Không thể gửi lời mời");
   }
 
-  const friendship = await prisma.friendship.create({
-    data: {
-      senderId: myId,
-      receiverId: targetId,
-      status: FriendStatus.PENDING,
-    },
-  });
-
-  await createAndEmitNotification({
-    userId: targetId,
-    fromUserId: myId,
-    type: "FRIEND_REQUEST",
-    friendshipId: friendship.id,
-    targetType: "friendship",
-  });
-
-  const me = await prisma.user.findUnique({
-    where: { id: myId },
-    select: { id: true, username: true, avatar: true },
-  });
-
-  try {
-    getSocketInstance()
-      .to(`user:${targetId}`)
-      .to(`user:${myId}`)
-      .emit("friend_request_sent", { friendship, sender: me });
-  } catch {
-    /* socket not ready */
-  }
-
   return { ok: true };
 };
 
@@ -127,14 +95,6 @@ export const acceptRequest = async (myId: string, senderId: string) => {
     }),
   ]);
 
-  await createAndEmitNotification({
-    userId: senderId,
-    fromUserId: myId,
-    type: "FRIEND_ACCEPTED",
-    friendshipId: friendship.id,
-    targetType: "friendship",
-  });
-
   const [me, senderUser] = await Promise.all([
     prisma.user.findUnique({
       where: { id: myId },
@@ -145,21 +105,6 @@ export const acceptRequest = async (myId: string, senderId: string) => {
       select: { id: true, username: true, avatar: true, friendsCount: true },
     }),
   ]);
-
-  try {
-    // Emit đến cả hai: sender biết được chấp nhận, accepter (actor) tự update UI
-    getSocketInstance()
-      .to(`user:${senderId}`)
-      .to(`user:${myId}`)
-      .emit("friend_accepted", {
-        friendship: updated,
-        // Đủ data để cả hai phía setQueryData mà không cần refetch
-        accepter: me,
-        requester: senderUser,
-      });
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };
@@ -176,15 +121,6 @@ export const rejectRequest = async (myId: string, senderId: string) => {
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
 
-  try {
-    getSocketInstance()
-      .to(`user:${senderId}`)
-      .to(`user:${myId}`)
-      .emit("friend_request_rejected", { receiver: friendship.receiver });
-  } catch {
-    /* socket not ready */
-  }
-
   return { ok: true };
 };
 
@@ -199,15 +135,6 @@ export const cancelRequest = async (myId: string, receiverId: string) => {
   if (!friendship) throw new AppError(404, "Không tìm thấy lời mời đã gửi");
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
-
-  try {
-    getSocketInstance()
-      .to(`user:${receiverId}`)
-      .to(`user:${myId}`)
-      .emit("friend_request_cancelled", { sender: friendship.sender });
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };
@@ -236,15 +163,6 @@ export const unfriend = async (myId: string, targetId: string) => {
       data: { friendsCount: { decrement: 1 } },
     }),
   ]);
-
-  try {
-    getSocketInstance()
-      .to(`user:${myId}`)
-      .to(`user:${targetId}`)
-      .emit("friend_unfriended", { userId: myId, targetId });
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };
@@ -294,20 +212,6 @@ export const blockUser = async (myId: string, targetId: string) => {
     }
   });
 
-  try {
-    // wasFriends cần để client biết có cần xoá bạn khỏi list không
-    getSocketInstance()
-      .to(`user:${myId}`)
-      .to(`user:${targetId}`)
-      .emit("friend_blocked", {
-        blockerId: myId,
-        blockedId: targetId,
-        wasFriends,
-      });
-  } catch {
-    /* socket not ready */
-  }
-
   return { ok: true };
 };
 
@@ -323,15 +227,6 @@ export const unblockUser = async (myId: string, targetId: string) => {
   if (!friendship) throw new AppError(404, "Không tìm thấy người bị chặn");
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
-
-  try {
-    getSocketInstance()
-      .to(`user:${myId}`)
-      .to(`user:${targetId}`)
-      .emit("friend_unblocked", { unblockerId: myId, unblockedId: targetId });
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };

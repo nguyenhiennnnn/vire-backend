@@ -7,7 +7,6 @@ import {
   extractPublicId,
 } from "../../services/cloudinary.service";
 import { AppError } from "../../utils/app-error";
-import { forceDisconnectUser, getSocketInstance } from "../../socket";
 
 const USER_PUBLIC_SELECT = {
   id: true,
@@ -175,8 +174,6 @@ export const deactivate = async (userId: string) => {
     prisma.userToken.deleteMany({ where: { userId } }),
   ]);
 
-  forceDisconnectUser(userId);
-
   return { message: "Tài khoản đã được vô hiệu hoá" };
 };
 
@@ -228,8 +225,6 @@ export const deleteAccount = async (userId: string) => {
       : []),
     prisma.user.delete({ where: { id: userId } }),
   ]);
-
-  forceDisconnectUser(userId);
 
   return { message: "Tài khoản đã được xoá vĩnh viễn" };
 };

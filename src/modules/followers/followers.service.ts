@@ -1,9 +1,7 @@
 import { FriendStatus } from "../../prisma/generated/prisma/enums";
 import { prisma } from "../../lib/prisma";
-import { createAndEmitNotification } from "../../services/notification.service";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
-import { getSocketInstance } from "../../socket";
 
 // ─── Follow ───────────────────────────────────────────────
 export const follow = async (myId: string, targetId: string) => {
@@ -46,14 +44,6 @@ export const follow = async (myId: string, targetId: string) => {
     }),
   ]);
 
-  await createAndEmitNotification({
-    userId: targetId,
-    fromUserId: myId,
-    type: "NEW_FOLLOWER",
-    friendshipId: null,
-    targetType: null,
-  });
-
   const [followerUser, followingUser] = await Promise.all([
     prisma.user.findUnique({
       where: { id: myId },
@@ -64,20 +54,6 @@ export const follow = async (myId: string, targetId: string) => {
       select: { id: true, username: true, avatar: true, followersCount: true },
     }),
   ]);
-
-  try {
-    getSocketInstance()
-      .to(`user:${targetId}`)
-      .to(`user:${myId}`)
-      .emit("user:followed", {
-        followerId: myId,
-        followingId: targetId,
-        followerUser,
-        followingUser,
-      });
-  } catch {
-    /* socket not ready */
-  }
 
   return { message: "Đã theo dõi", follower };
 };
@@ -102,15 +78,6 @@ export const unfollow = async (myId: string, targetId: string) => {
       data: { followingCount: { decrement: 1 } },
     }),
   ]);
-
-  try {
-    getSocketInstance()
-      .to(`user:${targetId}`)
-      .to(`user:${myId}`)
-      .emit("user:unfollowed", { followerId: myId, followingId: targetId });
-  } catch {
-    /* socket not ready */
-  }
 
   return { message: "Đã bỏ theo dõi" };
 };

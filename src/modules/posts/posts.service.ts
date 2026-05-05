@@ -2,17 +2,7 @@ import { AppError } from "../../utils/app-error";
 import { prisma } from "../../lib/prisma";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { deleteManyResources } from "../../services/cloudinary.service";
-import { getSocketInstance } from "../../socket";
 import { FriendStatus, Privacy } from "../../prisma/generated/prisma/enums";
-import { createAndEmitNotification } from "../../services/notification.service";
-
-const emitToPost = (postId: string, event: string, payload: unknown) => {
-  try {
-    getSocketInstance().to(`post:${postId}`).emit(event, payload);
-  } catch {
-    // socket not initialised
-  }
-};
 
 const POST_INCLUDE = (myId: string) => ({
   user: { select: { id: true, username: true, avatar: true } },
@@ -102,15 +92,6 @@ export const createPost = async (
     },
   };
 
-  // Emit riêng cho actor — để actor tự prepend vào feed của mình
-  try {
-    getSocketInstance()
-      .to(`user:${userId}`)
-      .emit("post:created_by_me", postPayload);
-  } catch {
-    /* socket not ready */
-  }
-
   if (post.privacy !== "ONLY_ME") {
     try {
       const friendships = await prisma.friendship.findMany({
@@ -135,23 +116,6 @@ export const createPost = async (
           .filter((id) => !friendIds.includes(id) && id !== userId);
         targetIds = [...friendIds, ...followerIds];
       }
-
-      const io = getSocketInstance();
-      for (const targetId of targetIds) {
-        io.to(`user:${targetId}`).emit("feed:new_post", postPayload);
-      }
-
-      await Promise.allSettled(
-        targetIds.map((targetId) =>
-          createAndEmitNotification({
-            userId: targetId,
-            fromUserId: userId,
-            type: "NEW_POST",
-            postId: post.id,
-            targetType: "post",
-          }),
-        ),
-      );
     } catch {
       /* socket not init */
     }
@@ -273,26 +237,11 @@ export const updatePost = async (
   if (post.userId !== myId)
     throw new AppError(403, "Bạn không có quyền chỉnh sửa bài viết này");
 
-  const updated = await prisma.post.update({
+  await prisma.post.update({
     where: { id: postId },
     data,
     include: POST_INCLUDE(myId),
   });
-
-  const payload = {
-    postId,
-    content: updated.content,
-    privacy: updated.privacy,
-    updatedAt: updated.updatedAt,
-  };
-
-  // Emit đến room (ai đang xem PostDetail) + actor trực tiếp (có thể đang ở feed)
-  emitToPost(postId, "post:updated", payload);
-  try {
-    getSocketInstance().to(`user:${myId}`).emit("post:updated", payload);
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };
@@ -308,16 +257,6 @@ export const deletePost = async (postId: string, myId: string) => {
     await deleteManyResources(post.mediaUrls).catch(() => null);
 
   await prisma.post.delete({ where: { id: postId } });
-
-  const payload = { postId };
-
-  // Emit đến room + actor
-  emitToPost(postId, "post:deleted", payload);
-  try {
-    getSocketInstance().to(`user:${myId}`).emit("post:deleted", payload);
-  } catch {
-    /* socket not ready */
-  }
 
   return { ok: true };
 };

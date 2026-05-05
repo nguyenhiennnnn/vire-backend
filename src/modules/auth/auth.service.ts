@@ -10,7 +10,6 @@ import {
 } from "../../utils/generate-token";
 import { generateOtp } from "../..//utils/generate-otp";
 import { AppError } from "../../utils/app-error";
-import { forceDisconnectUser } from "../../socket";
 
 const SALT_ROUNDS = 12;
 const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -192,7 +191,6 @@ export const refresh = async (refreshToken: string) => {
 // ─── Logout ───────────────────────────────────────────────
 export const logout = async (userId: string) => {
   await prisma.userToken.deleteMany({ where: { userId } });
-  forceDisconnectUser(userId);
   return { message: "Đăng xuất thành công" };
 };
 

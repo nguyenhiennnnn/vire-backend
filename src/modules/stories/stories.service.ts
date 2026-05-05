@@ -6,7 +6,6 @@ import {
   extractPublicId,
 } from "../../services/cloudinary.service";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
-import { getSocketInstance } from "../../socket";
 import { AppError } from "../../utils/app-error";
 
 // ─── Create story ─────────────────────────────────────────
@@ -31,7 +30,7 @@ export const createStory = async (
 
   const { url } = await uploadStream(file.buffer, uploadOptions);
 
-  const story = await prisma.story.create({
+  await prisma.story.create({
     data: {
       userId,
       mediaUrl: url,
@@ -41,46 +40,6 @@ export const createStory = async (
     },
     include: { user: { select: { id: true, username: true, avatar: true } } },
   });
-
-  try {
-    const friendships = await prisma.friendship.findMany({
-      where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
-        status: FriendStatus.ACCEPTED,
-      },
-    });
-
-    const friendIds = friendships.map((f) =>
-      f.senderId === userId ? f.receiverId : f.senderId,
-    );
-
-    const io = getSocketInstance();
-    const payload = {
-      story: {
-        id: story.id,
-        userId: story.userId,
-        mediaUrl: story.mediaUrl,
-        mediaType: story.mediaType,
-        caption: story.caption,
-        expiresAt: story.expiresAt,
-        createdAt: story.createdAt,
-        views: [],
-        isViewed: false,
-        viewsCount: 0,
-        _count: { views: 0 },
-      },
-      user: story.user,
-    };
-
-    // Emit đến friends
-    for (const friendId of friendIds) {
-      io.to(`user:${friendId}`).emit("story:new", payload);
-    }
-    // Emit đến chính actor để actor tự update feed của mình
-    io.to(`user:${userId}`).emit("story:created_by_me", payload);
-  } catch {
-    // socket not init — skip
-  }
 
   return { ok: true };
 };
@@ -236,26 +195,6 @@ export const recordView = async (storyId: string, viewerId: string) => {
     update: {},
   });
 
-  try {
-    const [viewer, viewsCount] = await Promise.all([
-      prisma.user.findUnique({
-        where: { id: viewerId },
-        select: { id: true, username: true, avatar: true },
-      }),
-      prisma.storyView.count({ where: { storyId } }),
-    ]);
-
-    // Emit đến room story — chỉ owner join room này (join_story event)
-    // Payload đủ để setQueryData trực tiếp, không cần refetch
-    getSocketInstance().to(`story:${storyId}`).emit("story:viewed", {
-      storyId,
-      viewer,
-      viewsCount,
-    });
-  } catch {
-    // socket not init — skip
-  }
-
   return { ok: true };
 };
 
@@ -296,30 +235,6 @@ export const deleteStory = async (storyId: string, userId: string) => {
   }
 
   await prisma.story.delete({ where: { id: storyId } });
-
-  try {
-    const friendships = await prisma.friendship.findMany({
-      where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
-        status: FriendStatus.ACCEPTED,
-      },
-    });
-    const friendIds = friendships.map((f) =>
-      f.senderId === userId ? f.receiverId : f.senderId,
-    );
-
-    const io = getSocketInstance();
-    const deletedPayload = { storyId, userId };
-
-    // Emit đến friends
-    for (const friendId of friendIds) {
-      io.to(`user:${friendId}`).emit("story:deleted", deletedPayload);
-    }
-    // Emit đến actor để tự update my-stories list
-    io.to(`user:${userId}`).emit("story:deleted_by_me", deletedPayload);
-  } catch {
-    // socket not init — skip
-  }
 
   return { ok: true };
 };

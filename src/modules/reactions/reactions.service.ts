@@ -1,15 +1,7 @@
 import { prisma } from "../../lib/prisma";
 import { checkPostPermission } from "../posts/posts.service";
-import { createAndEmitNotification } from "../../services/notification.service";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
-import { getSocketInstance } from "../../socket";
 import { ReactionType } from "../../prisma/generated/prisma/enums";
-
-const emitToPost = (postId: string, event: string, payload: unknown) => {
-  try {
-    getSocketInstance().to(`post:${postId}`).emit(event, payload);
-  } catch {}
-};
 
 // ─── Toggle reaction ──────────────────────────────────────
 export const toggleReaction = async (
@@ -40,27 +32,9 @@ export const toggleReaction = async (
       }),
     ]);
 
-    await createAndEmitNotification({
-      userId: post.userId,
-      fromUserId: userId,
-      type: "POST_REACT",
-      postId: postId,
-      targetType: "post",
-    });
-
     const updatedPost = await prisma.post.findUnique({
       where: { id: postId },
       select: { likesCount: true },
-    });
-
-    emitToPost(postId, "post:reaction", {
-      postId,
-      userId,
-      action: "created",
-      reactionType: type,
-      previousType: null,
-      likesCount: updatedPost?.likesCount ?? 0,
-      user: reacterUser,
     });
 
     return { action: "created" as const, reaction, post: updatedPost };
@@ -81,16 +55,6 @@ export const toggleReaction = async (
       select: { likesCount: true },
     });
 
-    emitToPost(postId, "post:reaction", {
-      postId,
-      userId,
-      action: "deleted",
-      reactionType: null,
-      previousType: existing.type,
-      likesCount: updatedPost?.likesCount ?? 0,
-      user: null,
-    });
-
     return { action: "deleted" as const, reaction: null, post: updatedPost };
   }
 
@@ -103,16 +67,6 @@ export const toggleReaction = async (
   const updatedPost = await prisma.post.findUnique({
     where: { id: postId },
     select: { likesCount: true },
-  });
-
-  emitToPost(postId, "post:reaction", {
-    postId,
-    userId,
-    action: "updated",
-    reactionType: type,
-    previousType: existing.type,
-    likesCount: updatedPost?.likesCount ?? 0,
-    user: reacterUser,
   });
 
   return { action: "updated" as const, reaction, post: updatedPost };

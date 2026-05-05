@@ -1,22 +1,11 @@
 import { AppError } from "../../utils/app-error";
 import { prisma } from "../../lib/prisma";
 import { checkPostPermission } from "../posts/posts.service";
-import { createAndEmitNotification } from "../../services/notification.service";
-import { getSocketInstance } from "../../socket";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 
 const COMMENT_INCLUDE = {
   user: { select: { id: true, username: true, avatar: true } },
   _count: { select: { replies: true } },
-};
-
-// ─── Emit helpers ─────────────────────────────────────────
-const emitToPost = (postId: string, event: string, payload: unknown) => {
-  try {
-    getSocketInstance().to(`post:${postId}`).emit(event, payload);
-  } catch {
-    // socket not initialised (test env)
-  }
 };
 
 // ─── Create root comment ──────────────────────────────────
@@ -37,27 +26,6 @@ export const createComment = async (
       data: { commentsCount: { increment: 1 } },
     }),
   ]);
-
-  // Notify post owner
-  await createAndEmitNotification({
-    userId: post.userId,
-    fromUserId: userId,
-    type: "POST_COMMENT",
-    postId: post.id,
-    targetType: "post",
-  });
-
-  // Broadcast new comment to everyone viewing this post
-  emitToPost(postId, "post:new_comment", {
-    postId,
-    comment,
-  });
-
-  // Broadcast updated commentsCount to everyone viewing this post
-  emitToPost(postId, "post:comments_count", {
-    postId,
-    commentsCount: post.commentsCount + 1,
-  });
 
   return { comment };
 };
@@ -96,27 +64,6 @@ export const createReply = async (
       data: { commentsCount: { increment: 1 } },
     }),
   ]);
-
-  await createAndEmitNotification({
-    userId: parentComment.userId,
-    fromUserId: userId,
-    type: "COMMENT_REPLY",
-    commentId: commentId,
-    postId: parentComment.postId,
-    targetType: "comment",
-  });
-
-  // Broadcast new reply to everyone viewing this post
-  emitToPost(parentComment.postId, "post:new_reply", {
-    postId: parentComment.postId,
-    commentId,
-    reply,
-  });
-
-  emitToPost(parentComment.postId, "post:comments_count", {
-    postId: parentComment.postId,
-    commentsCount: parentComment.post.commentsCount + 1,
-  });
 
   return { comment: reply };
 };
@@ -197,14 +144,6 @@ export const updateComment = async (
     include: { user: { select: { id: true, username: true, avatar: true } } },
   });
 
-  // Broadcast edit to room so other viewers see it live
-  emitToPost(comment.postId, "post:comment_updated", {
-    postId: comment.postId,
-    commentId,
-    content,
-    parentId: comment.parentId,
-  });
-
   return { comment: updated };
 };
 
@@ -228,14 +167,6 @@ export const deleteComment = async (commentId: string, userId: string) => {
       data: { commentsCount: { decrement: decrementBy } },
     }),
   ]);
-
-  // Broadcast delete to room
-  emitToPost(comment.postId, "post:comment_deleted", {
-    postId: comment.postId,
-    commentId,
-    parentId: comment.parentId,
-    decrementBy,
-  });
 
   return { message: "Đã xoá bình luận" };
 };
