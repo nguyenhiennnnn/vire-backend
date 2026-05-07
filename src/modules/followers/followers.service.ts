@@ -1,7 +1,9 @@
-import { FriendStatus } from "../../prisma/generated/prisma/enums";
+import { FriendStatus, NotifType } from "../../prisma/generated/prisma/enums";
 import { prisma } from "../../lib/prisma";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
+import { safeEmit } from "../../socket";
+import { createAndEmitNotification } from "../notifications/notifications.service";
 
 // ─── Follow ───────────────────────────────────────────────
 export const follow = async (myId: string, targetId: string) => {
@@ -30,7 +32,7 @@ export const follow = async (myId: string, targetId: string) => {
   });
   if (blocked) throw new AppError(403, "Không thể theo dõi người này");
 
-  const [follower] = await prisma.$transaction([
+  await prisma.$transaction([
     prisma.follower.create({
       data: { followerId: myId, followingId: targetId },
     }),
@@ -47,7 +49,7 @@ export const follow = async (myId: string, targetId: string) => {
   const [followerUser, followingUser] = await Promise.all([
     prisma.user.findUnique({
       where: { id: myId },
-      select: { id: true, username: true, avatar: true, followersCount: true },
+      select: { id: true, username: true, avatar: true, followingCount: true },
     }),
     prisma.user.findUnique({
       where: { id: targetId },
@@ -55,7 +57,26 @@ export const follow = async (myId: string, targetId: string) => {
     }),
   ]);
 
-  return { message: "Đã theo dõi", follower };
+  // Emit đến target: có follower mới
+  safeEmit(`user:${targetId}`, "follow:new_follower", {
+    follower: followerUser,
+    followersCount: followingUser!.followersCount,
+  });
+
+  // Emit về actor: update followingCount
+  safeEmit(`user:${myId}`, "follow:following_updated", {
+    followingId: targetId,
+    followingCount: followerUser!.followingCount,
+  });
+
+  // Notification cho target
+  await createAndEmitNotification({
+    userId: targetId,
+    fromUserId: myId,
+    type: NotifType.NEW_FOLLOWER,
+  });
+
+  return { message: "Đã theo dõi" };
 };
 
 // ─── Unfollow ─────────────────────────────────────────────
@@ -78,6 +99,29 @@ export const unfollow = async (myId: string, targetId: string) => {
       data: { followingCount: { decrement: 1 } },
     }),
   ]);
+
+  const [meUser, targetUser] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: myId },
+      select: { id: true, followingCount: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, followersCount: true },
+    }),
+  ]);
+
+  // Emit đến target: mất một follower
+  safeEmit(`user:${targetId}`, "follow:lost_follower", {
+    followerId: myId,
+    followersCount: targetUser!.followersCount,
+  });
+
+  // Emit về actor: update followingCount
+  safeEmit(`user:${myId}`, "follow:following_updated", {
+    followingId: targetId,
+    followingCount: meUser!.followingCount,
+  });
 
   return { message: "Đã bỏ theo dõi" };
 };

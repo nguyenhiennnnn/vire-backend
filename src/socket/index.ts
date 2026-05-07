@@ -1,7 +1,11 @@
 import { Server, Socket } from "socket.io";
 import { verifyAccessToken } from "../utils/generate-token";
+import { prisma } from "../lib/prisma";
+import { FriendStatus } from "../prisma/generated/prisma/enums";
 
 let ioInstance: Server | null = null;
+
+const onlineUsers: Set<string> = new Set<string>();
 
 export const initSocket = (server: import("http").Server): Server => {
   const io = new Server(server, {
@@ -23,7 +27,88 @@ export const initSocket = (server: import("http").Server): Server => {
   io.on("connection", async (socket: Socket) => {
     const userId = (socket.data as { userId: string }).userId;
 
-    socket.on("disconnect", () => {});
+    // ── Auto-join personal room ──────────────────────────────
+    socket.join(`user:${userId}`);
+    onlineUsers.add(userId);
+
+    // ── Broadcast online status to friends ──────────────────
+    try {
+      const friendships = await prisma.friendship.findMany({
+        where: {
+          OR: [
+            { senderId: userId, receiver: { isActive: true } },
+            { receiverId: userId, sender: { isActive: true } },
+          ],
+          status: FriendStatus.ACCEPTED,
+        },
+        select: { senderId: true, receiverId: true },
+      });
+
+      const friendIds = friendships.map((f) =>
+        f.senderId === userId ? f.receiverId : f.senderId,
+      );
+
+      const onlineFriendIds = friendIds.filter((id) => onlineUsers.has(id));
+      socket.emit("friends:online", onlineFriendIds);
+
+      for (const friendId of friendIds) {
+        io.to(`user:${friendId}`).emit("friend:online", {
+          userId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch {
+      /* non-critical */
+    }
+
+    // ── Post room: join / leave ──────────────────────────────
+    socket.on("post:join", (postId: string) => {
+      socket.join(`post:${postId}`);
+    });
+
+    socket.on("post:leave", (postId: string) => {
+      socket.leave(`post:${postId}`);
+    });
+
+    // ── Story room: join / leave (owner only) ────────────────
+    socket.on("story:join", (storyId: string) => {
+      socket.join(`story:${storyId}`);
+    });
+
+    socket.on("story:leave", (storyId: string) => {
+      socket.leave(`story:${storyId}`);
+    });
+
+    // ── Disconnect ───────────────────────────────────────────
+    socket.on("disconnect", async () => {
+      onlineUsers.delete(userId);
+
+      try {
+        const friendships = await prisma.friendship.findMany({
+          where: {
+            OR: [
+              { senderId: userId, receiver: { isActive: true } },
+              { receiverId: userId, sender: { isActive: true } },
+            ],
+            status: FriendStatus.ACCEPTED,
+          },
+          select: { senderId: true, receiverId: true },
+        });
+
+        const friendIds = friendships.map((f) =>
+          f.senderId === userId ? f.receiverId : f.senderId,
+        );
+
+        for (const friendId of friendIds) {
+          io.to(`user:${friendId}`).emit("friend:offline", {
+            userId,
+            lastSeen: new Date().toISOString(),
+          });
+        }
+      } catch {
+        /* non-critical */
+      }
+    });
   });
 
   ioInstance = io;
@@ -34,3 +119,18 @@ export const getSocketInstance = (): Server => {
   if (!ioInstance) throw new Error("Socket not initialized");
   return ioInstance;
 };
+
+/** Safely emit — does nothing if socket is not yet initialized */
+export const safeEmit = (
+  room: string,
+  event: string,
+  payload: unknown,
+): void => {
+  try {
+    getSocketInstance().to(room).emit(event, payload);
+  } catch {
+    /* socket not initialized in tests / background jobs */
+  }
+};
+
+export const getOnlineUsers = (): Set<string> => onlineUsers;

@@ -14,10 +14,17 @@ import passport from "../../lib/passport";
 
 const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
+// const cookieOptions = {
+//   httpOnly: true,
+//   secure: process.env.NODE_ENV !== "development",
+//   sameSite: "none" as const,
+//   maxAge: REFRESH_MAX_AGE_MS,
+// };
+
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV !== "development",
-  sameSite: "none" as const,
+  secure: false,
+  sameSite: "lax" as const,
   maxAge: REFRESH_MAX_AGE_MS,
 };
 

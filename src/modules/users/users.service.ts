@@ -190,7 +190,6 @@ export const deleteAccount = async (userId: string) => {
       getUserRelatedCounts(userId),
     ]);
 
-  // Gom tất cả publicIds cần xoá
   const allUrls: string[] = [];
   posts.forEach((p) => allUrls.push(...p.mediaUrls));
   stories.forEach((s) => allUrls.push(s.mediaUrl));

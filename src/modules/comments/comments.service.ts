@@ -2,6 +2,9 @@ import { AppError } from "../../utils/app-error";
 import { prisma } from "../../lib/prisma";
 import { checkPostPermission } from "../posts/posts.service";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
+import { NotifType } from "../../prisma/generated/prisma/enums";
+import { safeEmit } from "../../socket";
+import { createAndEmitNotification } from "../notifications/notifications.service";
 
 const COMMENT_INCLUDE = {
   user: { select: { id: true, username: true, avatar: true } },
@@ -27,7 +30,30 @@ export const createComment = async (
     }),
   ]);
 
-  return { comment };
+  const updatedPost = await prisma.post.findUnique({
+    where: { id: postId },
+    select: { commentsCount: true },
+  });
+
+  const emitPayload = {
+    postId,
+    comment,
+    commentsCount: updatedPost!.commentsCount,
+  };
+
+  safeEmit(`post:${postId}`, "comment:new", emitPayload);
+
+  if (post.userId !== userId) {
+    await createAndEmitNotification({
+      userId: post.userId,
+      fromUserId: userId,
+      type: NotifType.POST_COMMENT,
+      postId,
+      commentId: comment.id,
+    });
+  }
+
+  return { comment, commentsCount: updatedPost!.commentsCount };
 };
 
 // ─── Create reply ─────────────────────────────────────────
@@ -47,7 +73,7 @@ export const createReply = async (
       "Chỉ hỗ trợ reply 1 cấp, không thể reply vào reply",
     );
 
-  await checkPostPermission(parentComment.postId, userId);
+  const post = await checkPostPermission(parentComment.postId, userId);
 
   const [reply] = await prisma.$transaction([
     prisma.comment.create({
@@ -65,7 +91,41 @@ export const createReply = async (
     }),
   ]);
 
-  return { comment: reply };
+  const updatedPost = await prisma.post.findUnique({
+    where: { id: parentComment.postId },
+    select: { commentsCount: true },
+  });
+
+  const emitPayload = {
+    postId: parentComment.postId,
+    comment: reply,
+    parentId: commentId,
+    commentsCount: updatedPost!.commentsCount,
+  };
+
+  safeEmit(`post:${parentComment.postId}`, "comment:new", emitPayload);
+
+  if (parentComment.userId !== userId) {
+    await createAndEmitNotification({
+      userId: parentComment.userId,
+      fromUserId: userId,
+      type: NotifType.COMMENT_REPLY,
+      postId: parentComment.postId,
+      commentId: reply.id,
+    });
+  }
+
+  if (post.userId !== userId && post.userId !== parentComment.userId) {
+    await createAndEmitNotification({
+      userId: post.userId,
+      fromUserId: userId,
+      type: NotifType.POST_COMMENT,
+      postId: parentComment.postId,
+      commentId: reply.id,
+    });
+  }
+
+  return { comment: reply, commentsCount: updatedPost!.commentsCount };
 };
 
 // ─── Get comments (root, ASC cursor) ─────────────────────
@@ -144,6 +204,14 @@ export const updateComment = async (
     include: { user: { select: { id: true, username: true, avatar: true } } },
   });
 
+  safeEmit(`post:${comment.postId}`, "comment:updated", {
+    postId: comment.postId,
+    commentId,
+    parentId: comment.parentId,
+    content,
+    updatedAt: updated.updatedAt,
+  });
+
   return { comment: updated };
 };
 
@@ -167,6 +235,19 @@ export const deleteComment = async (commentId: string, userId: string) => {
       data: { commentsCount: { decrement: decrementBy } },
     }),
   ]);
+
+  const updatedPost = await prisma.post.findUnique({
+    where: { id: comment.postId },
+    select: { commentsCount: true },
+  });
+
+  safeEmit(`post:${comment.postId}`, "comment:deleted", {
+    postId: comment.postId,
+    commentId,
+    parentId: comment.parentId,
+    decrementBy,
+    commentsCount: updatedPost!.commentsCount,
+  });
 
   return { message: "Đã xoá bình luận" };
 };

@@ -2,7 +2,13 @@ import { AppError } from "../../utils/app-error";
 import { prisma } from "../../lib/prisma";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { deleteManyResources } from "../../services/cloudinary.service";
-import { FriendStatus, Privacy } from "../../prisma/generated/prisma/enums";
+import {
+  FriendStatus,
+  Privacy,
+  NotifType,
+} from "../../prisma/generated/prisma/enums";
+import { safeEmit } from "../../socket";
+import { createAndEmitNotification } from "../notifications/notifications.service";
 
 const POST_INCLUDE = (myId: string) => ({
   user: { select: { id: true, username: true, avatar: true } },
@@ -29,7 +35,6 @@ export const checkPostPermission = async (
 
   if (post.userId === myId) return post;
 
-  // Check blocked
   const blocked = await prisma.friendship.findFirst({
     where: {
       OR: [
@@ -60,6 +65,41 @@ export const checkPostPermission = async (
   return post;
 };
 
+// ─── Helper: resolve audience ids for a post ─────────────
+const resolveAudienceIds = async (
+  userId: string,
+  privacy: Privacy,
+): Promise<string[]> => {
+  const friendships = await prisma.friendship.findMany({
+    where: {
+      OR: [
+        { senderId: userId, receiver: { isActive: true } },
+        { receiverId: userId, sender: { isActive: true } },
+      ],
+      status: FriendStatus.ACCEPTED,
+    },
+    select: { senderId: true, receiverId: true },
+  });
+  const friendIds = friendships.map((f) =>
+    f.senderId === userId ? f.receiverId : f.senderId,
+  );
+
+  if (privacy === Privacy.FRIENDS) return friendIds;
+
+  if (privacy === Privacy.PUBLIC) {
+    const followings = await prisma.follower.findMany({
+      where: { followingId: userId, follower: { isActive: true } },
+      select: { followerId: true },
+    });
+    const followerIds = followings
+      .map((f) => f.followerId)
+      .filter((id) => !friendIds.includes(id) && id !== userId);
+    return [...new Set([...friendIds, ...followerIds])];
+  }
+
+  return []; // ONLY_ME → no one else
+};
+
 // ─── Create post ──────────────────────────────────────────
 export const createPost = async (
   userId: string,
@@ -76,57 +116,58 @@ export const createPost = async (
   });
 
   const postPayload = {
-    post: {
-      id: post.id,
-      userId: post.userId,
-      content: post.content,
-      mediaUrls: post.mediaUrls,
-      privacy: post.privacy,
-      createdAt: post.createdAt,
-      updatedAt: post.updatedAt,
-      user: post.user,
-      _count: post._count,
-      reactions: post.reactions,
-      commentsCount: post.commentsCount,
-      likesCount: post.likesCount,
-    },
+    id: post.id,
+    userId: post.userId,
+    content: post.content,
+    mediaUrls: post.mediaUrls,
+    privacy: post.privacy,
+    likesCount: post.likesCount,
+    commentsCount: post.commentsCount,
+    createdAt: post.createdAt,
+    updatedAt: post.updatedAt,
+    user: post.user,
+    _count: post._count,
+    reactions: post.reactions,
   };
 
-  if (post.privacy !== "ONLY_ME") {
-    try {
-      const friendships = await prisma.friendship.findMany({
-        where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
-          status: FriendStatus.ACCEPTED,
-        },
-        select: { senderId: true, receiverId: true },
-      });
-      const friendIds = friendships.map((f) =>
-        f.senderId === userId ? f.receiverId : f.senderId,
-      );
+  safeEmit(`user:${userId}`, "post:created", { post: postPayload });
 
-      let targetIds = [...friendIds];
-      if (post.privacy === "PUBLIC") {
-        const followings = await prisma.follower.findMany({
-          where: { followingId: userId },
-          select: { followerId: true },
-        });
-        const followerIds = followings
-          .map((f) => f.followerId)
-          .filter((id) => !friendIds.includes(id) && id !== userId);
-        targetIds = [...friendIds, ...followerIds];
-      }
-    } catch {
-      /* socket not init */
+  if (data.privacy !== Privacy.ONLY_ME) {
+    const audienceIds = await resolveAudienceIds(userId, data.privacy);
+
+    for (const recipientId of audienceIds) {
+      safeEmit(`user:${recipientId}`, "feed:new_post", { post: postPayload });
+    }
+
+    const friendships = await prisma.friendship.findMany({
+      where: {
+        OR: [
+          { senderId: userId, receiver: { isActive: true } },
+          { receiverId: userId, sender: { isActive: true } },
+        ],
+        status: FriendStatus.ACCEPTED,
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    const friendIds = friendships.map((f) =>
+      f.senderId === userId ? f.receiverId : f.senderId,
+    );
+
+    for (const friendId of friendIds) {
+      await createAndEmitNotification({
+        userId: friendId,
+        fromUserId: userId,
+        type: NotifType.NEW_POST,
+        postId: post.id,
+      });
     }
   }
 
-  return { ok: true };
+  return { ok: true, post: postPayload };
 };
 
 // ─── Get feed ─────────────────────────────────────────────
 export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
-  // IDs bạn bè
   const friendships = await prisma.friendship.findMany({
     where: {
       OR: [
@@ -140,20 +181,15 @@ export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
     f.senderId === myId ? f.receiverId : f.senderId,
   );
 
-  // IDs đang follow
   const followings = await prisma.follower.findMany({
     where: { followerId: myId, following: { isActive: true } },
     select: { followingId: true },
   });
   const followingIds = followings.map((f) => f.followingId);
 
-  // IDs bị block
   const blocks = await prisma.friendship.findMany({
     where: {
-      OR: [
-        { senderId: myId, sender: { isActive: true } },
-        { receiverId: myId, receiver: { isActive: true } },
-      ],
+      OR: [{ senderId: myId }, { receiverId: myId }],
       status: FriendStatus.BLOCKED,
     },
   });
@@ -162,10 +198,8 @@ export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
   );
 
   const friendSet = new Set(friendIds);
-  // following không là bạn bè (chỉ xem PUBLIC)
   const followOnlyIds = followingIds.filter((id) => !friendSet.has(id));
 
-  // Decode cursor
   let cursorCondition = {};
   if (cursor) {
     const { field, id } = decodeCursor(cursor);
@@ -184,14 +218,11 @@ export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
         { userId: { notIn: blockedIds } },
         {
           OR: [
-            // Bài của mình — tất cả privacy
             { userId: myId },
-            // Bài của bạn bè — PUBLIC + FRIENDS
             {
               userId: { in: friendIds },
               privacy: { in: [Privacy.PUBLIC, Privacy.FRIENDS] },
             },
-            // Bài của following only — chỉ PUBLIC
             { userId: { in: followOnlyIds }, privacy: Privacy.PUBLIC },
           ],
         },
@@ -237,13 +268,42 @@ export const updatePost = async (
   if (post.userId !== myId)
     throw new AppError(403, "Bạn không có quyền chỉnh sửa bài viết này");
 
-  await prisma.post.update({
+  const updated = await prisma.post.update({
     where: { id: postId },
     data,
     include: POST_INCLUDE(myId),
   });
 
-  return { ok: true };
+  const privacyChanged =
+    data.privacy !== undefined && data.privacy !== post.privacy;
+
+  const updatedPayload = { post: updated, privacyChanged };
+
+  safeEmit(`user:${myId}`, "post:updated", updatedPayload);
+  safeEmit(`post:${postId}`, "post:updated", updatedPayload);
+
+  if (privacyChanged) {
+    const [prevIds, nextIds] = await Promise.all([
+      resolveAudienceIds(myId, post.privacy as Privacy),
+      resolveAudienceIds(myId, data.privacy!),
+    ]);
+    const allAffectedIds = [...new Set([...prevIds, ...nextIds])].filter(
+      (id) => id !== myId,
+    );
+    for (const recipientId of allAffectedIds) {
+      safeEmit(`user:${recipientId}`, "post:updated", updatedPayload);
+    }
+  } else {
+    const audienceIds = await resolveAudienceIds(
+      myId,
+      updated.privacy as Privacy,
+    );
+    for (const recipientId of audienceIds) {
+      safeEmit(`user:${recipientId}`, "post:updated", updatedPayload);
+    }
+  }
+
+  return { ok: true, post: updated };
 };
 
 // ─── Delete post ──────────────────────────────────────────
@@ -253,10 +313,26 @@ export const deletePost = async (postId: string, myId: string) => {
   if (post.userId !== myId)
     throw new AppError(403, "Bạn không có quyền xoá bài viết này");
 
+  // Resolve audience trước khi xoá để emit sau
+  const audienceIds =
+    post.privacy !== Privacy.ONLY_ME
+      ? await resolveAudienceIds(myId, post.privacy as Privacy)
+      : [];
+
   if (post.mediaUrls.length)
     await deleteManyResources(post.mediaUrls).catch(() => null);
 
   await prisma.post.delete({ where: { id: postId } });
+
+  const deletedPayload = { postId, userId: myId };
+
+  safeEmit(`user:${myId}`, "post:deleted", deletedPayload);
+
+  safeEmit(`post:${postId}`, "post:deleted", deletedPayload);
+
+  for (const recipientId of audienceIds) {
+    safeEmit(`user:${recipientId}`, "post:deleted", deletedPayload);
+  }
 
   return { ok: true };
 };
@@ -274,20 +350,11 @@ export const getUserPosts = async (
   if (!target || !target.isActive)
     throw new AppError(404, "Người dùng không tồn tại");
 
-  // Check blocked
   const blocked = await prisma.friendship.findFirst({
     where: {
       OR: [
-        {
-          senderId: myId,
-          receiverId: targetId,
-          receiver: { isActive: true },
-        },
-        {
-          senderId: targetId,
-          receiverId: myId,
-          sender: { isActive: true },
-        },
+        { senderId: myId, receiverId: targetId, receiver: { isActive: true } },
+        { senderId: targetId, receiverId: myId, sender: { isActive: true } },
       ],
       status: FriendStatus.BLOCKED,
     },
@@ -306,11 +373,7 @@ export const getUserPosts = async (
             receiverId: targetId,
             receiver: { isActive: true },
           },
-          {
-            senderId: targetId,
-            receiverId: myId,
-            sender: { isActive: true },
-          },
+          { senderId: targetId, receiverId: myId, sender: { isActive: true } },
         ],
         status: FriendStatus.ACCEPTED,
       },

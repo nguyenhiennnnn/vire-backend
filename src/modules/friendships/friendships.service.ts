@@ -1,9 +1,12 @@
-import { FriendStatus } from "../../prisma/generated/prisma/enums";
+import { FriendStatus, NotifType } from "../../prisma/generated/prisma/enums";
 import { prisma } from "../../lib/prisma";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
+import { getOnlineUsers, safeEmit } from "../../socket";
+import { createAndEmitNotification } from "../notifications/notifications.service";
 
-// ─── Helper: get friend ids ───────────────────────────────
+const onlineUsers = getOnlineUsers();
+
 export const getMyFriendIds = async (userId: string): Promise<string[]> => {
   const rows = await prisma.friendship.findMany({
     where: {
@@ -18,7 +21,6 @@ export const getMyFriendIds = async (userId: string): Promise<string[]> => {
   return rows.map((r) => (r.senderId === userId ? r.receiverId : r.senderId));
 };
 
-// ─── Helper: get blocked ids ──────────────────────────────
 const getBlockedIds = async (userId: string): Promise<string[]> => {
   const rows = await prisma.friendship.findMany({
     where: {
@@ -33,7 +35,6 @@ const getBlockedIds = async (userId: string): Promise<string[]> => {
   return rows.map((r) => (r.senderId === userId ? r.receiverId : r.senderId));
 };
 
-// ─── Send friend request ──────────────────────────────────
 export const sendRequest = async (myId: string, targetId: string) => {
   if (myId === targetId)
     throw new AppError(400, "Không thể gửi lời mời cho chính mình");
@@ -70,10 +71,43 @@ export const sendRequest = async (myId: string, targetId: string) => {
       throw new AppError(403, "Không thể gửi lời mời");
   }
 
-  return { ok: true };
+  const sender = await prisma.user.findUnique({
+    where: { id: myId },
+    select: { id: true, username: true, avatar: true, friendsCount: true },
+  });
+
+  const friendship = await prisma.friendship.create({
+    data: {
+      senderId: myId,
+      receiverId: targetId,
+      status: FriendStatus.PENDING,
+    },
+    include: {
+      sender: {
+        select: { id: true, username: true, avatar: true, friendsCount: true },
+      },
+      receiver: {
+        select: { id: true, username: true, avatar: true },
+      },
+    },
+  });
+
+  safeEmit(`user:${targetId}`, "friend:request_received", {
+    friendship,
+    sender,
+  });
+  safeEmit(`user:${myId}`, "friend:request_sent", { friendship });
+
+  await createAndEmitNotification({
+    userId: targetId,
+    fromUserId: myId,
+    type: NotifType.FRIEND_REQUEST,
+    friendshipId: friendship.id,
+  });
+
+  return { ok: true, friendship };
 };
 
-// ─── Accept ───────────────────────────────────────────────
 export const acceptRequest = async (myId: string, senderId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: { senderId, receiverId: myId, status: FriendStatus.PENDING },
@@ -95,7 +129,7 @@ export const acceptRequest = async (myId: string, senderId: string) => {
     }),
   ]);
 
-  const [me, senderUser] = await Promise.all([
+  const [meUser, senderUser] = await Promise.all([
     prisma.user.findUnique({
       where: { id: myId },
       select: { id: true, username: true, avatar: true, friendsCount: true },
@@ -106,40 +140,84 @@ export const acceptRequest = async (myId: string, senderId: string) => {
     }),
   ]);
 
+  const users = { [myId]: meUser, [senderId]: senderUser };
+
+  const acceptedPayload = {
+    friendship: {
+      ...updated,
+      status: FriendStatus.ACCEPTED,
+      sender: senderUser,
+      receiver: meUser,
+    },
+    users,
+  };
+
+  safeEmit(`user:${senderId}`, "friend:request_accepted", acceptedPayload);
+  safeEmit(`user:${myId}`, "friend:you_accepted_request", acceptedPayload);
+
+  if (onlineUsers.has(senderId)) {
+    safeEmit(`user:${senderId}`, "friend:online", {
+      userId: myId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  if (onlineUsers.has(myId)) {
+    safeEmit(`user:${myId}`, "friend:online", {
+      userId: senderId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  await createAndEmitNotification({
+    userId: senderId,
+    fromUserId: myId,
+    type: NotifType.FRIEND_ACCEPTED,
+    friendshipId: friendship.id,
+  });
+
   return { ok: true };
 };
 
-// ─── Reject ───────────────────────────────────────────────
 export const rejectRequest = async (myId: string, senderId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: { senderId, receiverId: myId, status: FriendStatus.PENDING },
-    include: {
-      receiver: { select: { id: true, username: true, avatar: true } },
-    },
   });
   if (!friendship) throw new AppError(404, "Không tìm thấy lời mời kết bạn");
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
 
+  safeEmit(`user:${senderId}`, "friend:request_rejected", {
+    friendshipId: friendship.id,
+    rejectedBy: myId,
+  });
+  safeEmit(`user:${myId}`, "friend:you_rejected_request", {
+    friendshipId: friendship.id,
+    requestFrom: senderId,
+  });
+
   return { ok: true };
 };
 
-// ─── Cancel sent ──────────────────────────────────────────
 export const cancelRequest = async (myId: string, receiverId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: { senderId: myId, receiverId, status: FriendStatus.PENDING },
-    include: {
-      sender: { select: { id: true, username: true, avatar: true } },
-    },
   });
   if (!friendship) throw new AppError(404, "Không tìm thấy lời mời đã gửi");
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
 
+  safeEmit(`user:${receiverId}`, "friend:request_cancelled", {
+    friendshipId: friendship.id,
+    cancelledBy: myId,
+  });
+  safeEmit(`user:${myId}`, "friend:you_cancelled_request", {
+    friendshipId: friendship.id,
+    cancelledFor: receiverId,
+  });
+
   return { ok: true };
 };
 
-// ─── Unfriend ─────────────────────────────────────────────
 export const unfriend = async (myId: string, targetId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: {
@@ -164,10 +242,42 @@ export const unfriend = async (myId: string, targetId: string) => {
     }),
   ]);
 
+  const [meUser, targetUser] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: myId },
+      select: { id: true, friendsCount: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, friendsCount: true },
+    }),
+  ]);
+
+  const payload = {
+    friendshipId: friendship.id,
+    users: { [myId]: meUser, [targetId]: targetUser },
+  };
+
+  safeEmit(`user:${myId}`, "friend:you_unfriended", payload);
+  safeEmit(`user:${targetId}`, "friend:unfriended_by", payload);
+
+  const onlineUsers = getOnlineUsers();
+  if (onlineUsers.has(targetId)) {
+    safeEmit(`user:${targetId}`, "friend:offline", {
+      userId: myId,
+      lastSeen: new Date().toISOString(),
+    });
+  }
+  if (onlineUsers.has(myId)) {
+    safeEmit(`user:${myId}`, "friend:offline", {
+      userId: targetId,
+      lastSeen: new Date().toISOString(),
+    });
+  }
+
   return { ok: true };
 };
 
-// ─── Block ────────────────────────────────────────────────
 export const blockUser = async (myId: string, targetId: string) => {
   const existing = await prisma.friendship.findFirst({
     where: {
@@ -179,24 +289,32 @@ export const blockUser = async (myId: string, targetId: string) => {
   });
 
   const wasFriends = existing?.status === FriendStatus.ACCEPTED;
+  const hadPendingFromTarget =
+    existing?.status === FriendStatus.PENDING && existing.senderId === targetId;
+  const hadPendingSentByMe =
+    existing?.status === FriendStatus.PENDING && existing.senderId === myId;
+
+  let blockRecord: { id: string } = { id: "" };
 
   await prisma.$transaction(async (tx) => {
     if (existing) {
-      await tx.friendship.update({
+      blockRecord = await tx.friendship.update({
         where: { id: existing.id },
         data: {
           senderId: myId,
           receiverId: targetId,
           status: FriendStatus.BLOCKED,
         },
+        select: { id: true },
       });
     } else {
-      await tx.friendship.create({
+      blockRecord = await tx.friendship.create({
         data: {
           senderId: myId,
           receiverId: targetId,
           status: FriendStatus.BLOCKED,
         },
+        select: { id: true },
       });
     }
 
@@ -212,10 +330,39 @@ export const blockUser = async (myId: string, targetId: string) => {
     }
   });
 
+  const [meUser, targetUser] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: myId },
+      select: { id: true, friendsCount: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, friendsCount: true },
+    }),
+  ]);
+
+  const users = { [myId]: meUser, [targetId]: targetUser };
+
+  safeEmit(`user:${myId}`, "friend:you_blocked", {
+    targetId,
+    wasFriends,
+    hadPendingFromThem: hadPendingFromTarget,
+    hadPendingToThem: hadPendingSentByMe,
+    friendshipId: blockRecord.id,
+    users,
+  });
+  safeEmit(`user:${targetId}`, "friend:blocked_by", {
+    actorId: myId,
+    wasFriends,
+    iHadSentRequest: hadPendingFromTarget,
+    theyHadSentRequest: hadPendingSentByMe,
+    friendshipId: blockRecord.id,
+    users,
+  });
+
   return { ok: true };
 };
 
-// ─── Unblock ──────────────────────────────────────────────
 export const unblockUser = async (myId: string, targetId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: {
@@ -228,10 +375,18 @@ export const unblockUser = async (myId: string, targetId: string) => {
 
   await prisma.friendship.delete({ where: { id: friendship.id } });
 
+  safeEmit(`user:${myId}`, "friend:you_unblocked", {
+    targetId,
+    friendshipId: friendship.id,
+  });
+  safeEmit(`user:${targetId}`, "friend:unblocked_by", {
+    actorId: myId,
+    friendshipId: friendship.id,
+  });
+
   return { ok: true };
 };
 
-// ─── Get pending requests ─────────────────────────────────
 export const getRequests = async (
   myId: string,
   cursor?: string,
@@ -289,7 +444,6 @@ export const getFriendRequestCount = async (myId: string) => {
   return { count };
 };
 
-// ─── Get sent requests ────────────────────────────────────
 export const getSentRequests = async (
   myId: string,
   cursor?: string,
@@ -334,7 +488,6 @@ export const getSentRequests = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Get friends list ─────────────────────────────────────
 export const getFriends = async (
   targetId: string,
   myId: string,
@@ -407,7 +560,6 @@ export const getFriends = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Get status ───────────────────────────────────────────
 export const getStatus = async (myId: string, targetId: string) => {
   const [friendship, follower] = await Promise.all([
     prisma.friendship.findFirst({
@@ -427,9 +579,9 @@ export const getStatus = async (myId: string, targetId: string) => {
 
   let friendshipStatus = "none";
   if (friendship) {
-    if (friendship.status === FriendStatus.ACCEPTED)
+    if (friendship.status === FriendStatus.ACCEPTED) {
       friendshipStatus = "accepted";
-    else if (friendship.status === FriendStatus.PENDING) {
+    } else if (friendship.status === FriendStatus.PENDING) {
       friendshipStatus =
         friendship.senderId === myId ? "pending_sent" : "pending_received";
     } else if (friendship.status === FriendStatus.BLOCKED) {
@@ -441,7 +593,6 @@ export const getStatus = async (myId: string, targetId: string) => {
   return { friendshipStatus, isFollowing: !!follower };
 };
 
-// ─── Suggestions (raw SQL → Prisma $queryRawUnsafe) ───────
 type SuggestionRow = {
   id: string;
   username: string;

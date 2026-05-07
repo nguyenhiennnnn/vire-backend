@@ -7,6 +7,25 @@ import {
 } from "../../services/cloudinary.service";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
+import { safeEmit } from "../../socket";
+
+// ─── Helper: get story audience (friends + followers) ─────
+const getStoryAudienceIds = async (userId: string): Promise<string[]> => {
+  const friendships = await prisma.friendship.findMany({
+    where: {
+      OR: [
+        { senderId: userId, receiver: { isActive: true } },
+        { receiverId: userId, sender: { isActive: true } },
+      ],
+      status: FriendStatus.ACCEPTED,
+    },
+    select: { senderId: true, receiverId: true },
+  });
+  // Story chỉ visible cho bạn bè (theo business rule getActiveStories)
+  return friendships.map((f) =>
+    f.senderId === userId ? f.receiverId : f.senderId,
+  );
+};
 
 // ─── Create story ─────────────────────────────────────────
 export const createStory = async (
@@ -30,7 +49,7 @@ export const createStory = async (
 
   const { url } = await uploadStream(file.buffer, uploadOptions);
 
-  await prisma.story.create({
+  const story = await prisma.story.create({
     data: {
       userId,
       mediaUrl: url,
@@ -41,7 +60,26 @@ export const createStory = async (
     include: { user: { select: { id: true, username: true, avatar: true } } },
   });
 
-  return { ok: true };
+  const storyPayload = {
+    id: story.id,
+    userId: story.userId,
+    mediaUrl: story.mediaUrl,
+    mediaType: story.mediaType,
+    caption: story.caption,
+    expiresAt: story.expiresAt,
+    createdAt: story.createdAt,
+    user: story.user,
+  };
+
+  safeEmit(`user:${userId}`, "story:you_created", { story: storyPayload });
+
+  // Emit story mới đến bạn bè
+  const friendIds = await getStoryAudienceIds(userId);
+  for (const friendId of friendIds) {
+    safeEmit(`user:${friendId}`, "story:new", { story: storyPayload });
+  }
+
+  return { ok: true, story };
 };
 
 // ─── Feed stories (grouped, only friends, not expired) ────
@@ -97,6 +135,7 @@ export const getFeedStories = async (userId: string) => {
 
   let storyGroups = Array.from(groupMap.values());
 
+  // Own stories luôn đứng đầu, sau đó sort theo hasUnread
   storyGroups = storyGroups.sort((a, b) => {
     if (a.user.id === userId) return -1;
     if (b.user.id === userId) return 1;
@@ -158,17 +197,18 @@ export const getActiveStories = async (targetId: string, myId: string) => {
   });
   if (!target) throw new AppError(404, "Người dùng không tồn tại");
 
-  const friendship = await prisma.friendship.findFirst({
-    where: {
-      OR: [
-        { senderId: myId, receiverId: targetId },
-        { senderId: targetId, receiverId: myId },
-      ],
-      status: FriendStatus.ACCEPTED,
-    },
-  });
-
-  if (!friendship) throw new AppError(403, "Chỉ bạn bè mới xem được story");
+  if (myId !== targetId) {
+    const friendship = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { senderId: myId, receiverId: targetId },
+          { senderId: targetId, receiverId: myId },
+        ],
+        status: FriendStatus.ACCEPTED,
+      },
+    });
+    if (!friendship) throw new AppError(403, "Chỉ bạn bè mới xem được story");
+  }
 
   const stories = await prisma.story.findMany({
     where: { userId: targetId, expiresAt: { gt: new Date() } },
@@ -187,12 +227,27 @@ export const getActiveStories = async (targetId: string, myId: string) => {
 export const recordView = async (storyId: string, viewerId: string) => {
   const story = await prisma.story.findUnique({ where: { id: storyId } });
   if (!story) throw new AppError(404, "Story không tồn tại");
+  if (story.expiresAt <= new Date())
+    throw new AppError(410, "Story đã hết hạn");
+
+  // Owner xem story của mình không cần record
   if (story.userId === viewerId) return { ok: true };
 
   await prisma.storyView.upsert({
     where: { storyId_viewerId: { storyId, viewerId } },
     create: { storyId, viewerId },
     update: {},
+  });
+
+  const viewer = await prisma.user.findUnique({
+    where: { id: viewerId },
+    select: { id: true, username: true, avatar: true },
+  });
+
+  safeEmit(`user:${story.userId}`, "story:viewed", {
+    storyId,
+    viewer,
+    viewedAt: new Date().toISOString(),
   });
 
   return { ok: true };
@@ -236,5 +291,26 @@ export const deleteStory = async (storyId: string, userId: string) => {
 
   await prisma.story.delete({ where: { id: storyId } });
 
+  safeEmit(`story:${storyId}`, "story:deleted", { storyId });
+  safeEmit(`user:${userId}`, "story:you_deleted", { storyId });
+
+  const friendIds = await getStoryAudienceIds(userId);
+  for (const friendId of friendIds) {
+    safeEmit(`user:${friendId}`, "story:removed_from_tray", {
+      storyId,
+      userId,
+    });
+  }
+
   return { ok: true };
+};
+
+// ─── Expire story (called by background job) ──────────────
+// Server-side job gọi hàm này sau khi xoá story hết hạn
+export const emitStoryExpired = async (
+  storyId: string,
+  ownerId: string,
+): Promise<void> => {
+  safeEmit(`user:${ownerId}`, "story:expired", { storyId });
+  safeEmit(`story:${storyId}`, "story:deleted", { storyId });
 };

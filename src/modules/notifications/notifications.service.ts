@@ -1,9 +1,49 @@
 import { AppError } from "../../utils/app-error";
 import { prisma } from "../../lib/prisma";
 import { decodeCursor, encodeCursor } from "../../utils/cursor";
+import { NotifType } from "../../prisma/generated/prisma/enums";
+import { safeEmit } from "../../socket";
 
 const NOTIF_INCLUDE = {
   fromUser: { select: { id: true, username: true, avatar: true } },
+};
+
+// ─── Internal: create notification + emit ────────────────
+export const createAndEmitNotification = async (params: {
+  userId: string; // recipient
+  fromUserId: string; // actor
+  type: NotifType;
+  postId?: string;
+  commentId?: string;
+  friendshipId?: string;
+  targetType?: string;
+}) => {
+  // Don't notify self
+  if (params.userId === params.fromUserId) return null;
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId: params.userId,
+      fromUserId: params.fromUserId,
+      type: params.type,
+      postId: params.postId,
+      commentId: params.commentId,
+      friendshipId: params.friendshipId,
+      targetType: params.targetType,
+    },
+    include: NOTIF_INCLUDE,
+  });
+
+  const unreadCount = await prisma.notification.count({
+    where: { userId: params.userId, isRead: false },
+  });
+
+  safeEmit(`user:${params.userId}`, "notification:new", {
+    notification,
+    unreadCount,
+  });
+
+  return notification;
 };
 
 // ─── Get notifications ────────────────────────────────────
@@ -70,6 +110,16 @@ export const markRead = async (notifId: string, userId: string) => {
     data: { isRead: true },
     include: NOTIF_INCLUDE,
   });
+
+  const unreadCount = await prisma.notification.count({
+    where: { userId, isRead: false },
+  });
+
+  safeEmit(`user:${userId}`, "notification:read", {
+    notificationIds: [notifId],
+    unreadCount,
+  });
+
   return { notification };
 };
 
@@ -79,6 +129,12 @@ export const markAllRead = async (userId: string) => {
     where: { userId, isRead: false },
     data: { isRead: true },
   });
+
+  safeEmit(`user:${userId}`, "notification:read_all", {
+    notificationIds: [], // empty = all
+    unreadCount: 0,
+  });
+
   return { updatedCount: result.count };
 };
 
@@ -91,5 +147,15 @@ export const deleteNotification = async (notifId: string, userId: string) => {
   if (notif.userId !== userId) throw new AppError(403, "Không có quyền");
 
   await prisma.notification.delete({ where: { id: notifId } });
+
+  const unreadCount = await prisma.notification.count({
+    where: { userId, isRead: false },
+  });
+
+  safeEmit(`user:${userId}`, "notification:deleted", {
+    notificationId: notifId,
+    unreadCount,
+  });
+
   return { message: "Đã xoá thông báo" };
 };
