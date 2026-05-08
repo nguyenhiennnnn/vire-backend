@@ -5,7 +5,6 @@ import { ReactionType, NotifType } from "../../prisma/generated/prisma/enums";
 import { safeEmit } from "../../socket";
 import { createAndEmitNotification } from "../notifications/notifications.service";
 
-// ─── Helper: build full reaction breakdown ────────────────
 const buildReactionBreakdown = async (postId: string) => {
   const grouped = await prisma.reaction.groupBy({
     by: ["type"],
@@ -30,7 +29,6 @@ const buildReactionBreakdown = async (postId: string) => {
   return { byType, total };
 };
 
-// ─── Toggle reaction ──────────────────────────────────────
 export const toggleReaction = async (
   postId: string,
   userId: string,
@@ -45,7 +43,6 @@ export const toggleReaction = async (
   let action: "created" | "deleted" | "updated";
   let newType: ReactionType | null;
 
-  // Case 1: no reaction → create
   if (!existing) {
     await prisma.$transaction([
       prisma.reaction.create({ data: { userId, postId, type } }),
@@ -57,7 +54,6 @@ export const toggleReaction = async (
     action = "created";
     newType = type;
 
-    // Notify post owner (not self)
     if (post.userId !== userId) {
       await createAndEmitNotification({
         userId: post.userId,
@@ -66,9 +62,7 @@ export const toggleReaction = async (
         postId,
       });
     }
-  }
-  // Case 2: same type → delete (toggle off)
-  else if (existing.type === type) {
+  } else if (existing.type === type) {
     await prisma.$transaction([
       prisma.reaction.delete({ where: { id: existing.id } }),
       prisma.post.update({
@@ -78,9 +72,7 @@ export const toggleReaction = async (
     ]);
     action = "deleted";
     newType = null;
-  }
-  // Case 3: different type → update (likesCount unchanged)
-  else {
+  } else {
     await prisma.reaction.update({
       where: { id: existing.id },
       data: { type },
@@ -89,7 +81,6 @@ export const toggleReaction = async (
     newType = type;
   }
 
-  // Fetch updated state
   const [updatedPost, breakdown] = await Promise.all([
     prisma.post.findUnique({
       where: { id: postId },
@@ -101,7 +92,7 @@ export const toggleReaction = async (
   const emitPayload = {
     postId,
     userId,
-    reactionType: newType, // null = removed
+    reactionType: newType,
     likesCount: updatedPost!.likesCount,
     breakdown: breakdown.byType,
     total: breakdown.total,
@@ -112,7 +103,6 @@ export const toggleReaction = async (
   return { action, ...emitPayload, reactionType: newType };
 };
 
-// ─── List reactions ───────────────────────────────────────
 export const getReactions = async (
   postId: string,
   myId: string,
@@ -159,7 +149,6 @@ export const getReactions = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Summary ──────────────────────────────────────────────
 export const getReactionSummary = async (postId: string, myId: string) => {
   await checkPostPermission(postId, myId);
 
@@ -181,7 +170,6 @@ export const getReactionSummary = async (postId: string, myId: string) => {
   };
 };
 
-// ─── My reaction ──────────────────────────────────────────
 export const getMyReaction = async (postId: string, myId: string) => {
   const reaction = await prisma.reaction.findUnique({
     where: { userId_postId: { userId: myId, postId } },

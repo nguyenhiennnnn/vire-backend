@@ -14,13 +14,11 @@ import { AppError } from "../../utils/app-error";
 const SALT_ROUNDS = 12;
 const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-// ─── Helpers ─────────────────────────────────────────────
 const omitPassword = <T extends { password: string | null }>(user: T) => {
   const { password: _, ...rest } = user;
   return rest;
 };
 
-// ─── Register ────────────────────────────────────────────
 export const register = async (data: {
   username: string;
   email: string;
@@ -61,7 +59,6 @@ export const register = async (data: {
   return { message: "Kiểm tra email của bạn để xác thực tài khoản" };
 };
 
-// ─── Verify Email ─────────────────────────────────────────
 export const verifyEmail = async (token: string) => {
   if (!token) throw new AppError(400, "Token không hợp lệ");
 
@@ -87,10 +84,9 @@ export const verifyEmail = async (token: string) => {
   return { message: "Email đã được xác thực thành công" };
 };
 
-// ─── Resend Verify ────────────────────────────────────────
 export const resendVerify = async (email: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return { message: "Email xác thực đã được gửi lại" }; // tránh leak
+  if (!user) return { message: "Email xác thực đã được gửi lại" };
 
   if (user.isVerified) throw new AppError(400, "Email đã được xác thực rồi");
 
@@ -107,7 +103,6 @@ export const resendVerify = async (email: string) => {
   return { message: "Email xác thực đã được gửi lại" };
 };
 
-// ─── Login ────────────────────────────────────────────────
 export const login = async (email: string, password: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) throw new AppError(401, "Email hoặc mật khẩu không đúng");
@@ -153,7 +148,6 @@ export const login = async (email: string, password: string) => {
   return { accessToken, refreshToken, user: omitPassword(user) };
 };
 
-// ─── Refresh ──────────────────────────────────────────────
 export const refresh = async (refreshToken: string) => {
   const stored = await prisma.userToken.findUnique({ where: { refreshToken } });
 
@@ -188,13 +182,11 @@ export const refresh = async (refreshToken: string) => {
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };
 };
 
-// ─── Logout ───────────────────────────────────────────────
 export const logout = async (userId: string) => {
   await prisma.userToken.deleteMany({ where: { userId } });
   return { message: "Đăng xuất thành công" };
 };
 
-// ─── Forgot Password ──────────────────────────────────────
 export const forgotPassword = async (email: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return { message: "Mã OTP đã được gửi nếu email tồn tại" }; // tránh leak
@@ -223,7 +215,6 @@ export const forgotPassword = async (email: string) => {
   return { message: "Mã OTP đã được gửi nếu email tồn tại" };
 };
 
-// ─── Verify OTP ───────────────────────────────────────────
 export const verifyOtp = async (email: string, code: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) throw new AppError(400, "Thông tin không hợp lệ");
@@ -271,7 +262,6 @@ export const verifyOtp = async (email: string, code: string) => {
   return { resetToken };
 };
 
-// ─── Reset Password ───────────────────────────────────────
 export const resetPassword = async (
   resetToken: string,
   newPassword: string,
@@ -300,7 +290,6 @@ export const resetPassword = async (
   return { message: "Đặt lại mật khẩu thành công" };
 };
 
-// ─── Change Password ──────────────────────────────────────
 export const changePassword = async (
   userId: string,
   currentPassword: string,

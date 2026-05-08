@@ -27,11 +27,9 @@ export const initSocket = (server: import("http").Server): Server => {
   io.on("connection", async (socket: Socket) => {
     const userId = (socket.data as { userId: string }).userId;
 
-    // ── Auto-join personal room ──────────────────────────────
     socket.join(`user:${userId}`);
     onlineUsers.add(userId);
 
-    // ── Broadcast online status to friends ──────────────────
     try {
       const friendships = await prisma.friendship.findMany({
         where: {
@@ -57,11 +55,8 @@ export const initSocket = (server: import("http").Server): Server => {
           timestamp: new Date().toISOString(),
         });
       }
-    } catch {
-      /* non-critical */
-    }
+    } catch {}
 
-    // ── Post room: join / leave ──────────────────────────────
     socket.on("post:join", (postId: string) => {
       socket.join(`post:${postId}`);
     });
@@ -70,7 +65,6 @@ export const initSocket = (server: import("http").Server): Server => {
       socket.leave(`post:${postId}`);
     });
 
-    // ── Story room: join / leave (owner only) ────────────────
     socket.on("story:join", (storyId: string) => {
       socket.join(`story:${storyId}`);
     });
@@ -79,7 +73,6 @@ export const initSocket = (server: import("http").Server): Server => {
       socket.leave(`story:${storyId}`);
     });
 
-    // ── Disconnect ───────────────────────────────────────────
     socket.on("disconnect", async () => {
       onlineUsers.delete(userId);
 
@@ -105,9 +98,7 @@ export const initSocket = (server: import("http").Server): Server => {
             lastSeen: new Date().toISOString(),
           });
         }
-      } catch {
-        /* non-critical */
-      }
+      } catch {}
     });
   });
 
@@ -120,7 +111,6 @@ export const getSocketInstance = (): Server => {
   return ioInstance;
 };
 
-/** Safely emit — does nothing if socket is not yet initialized */
 export const safeEmit = (
   room: string,
   event: string,
@@ -128,9 +118,7 @@ export const safeEmit = (
 ): void => {
   try {
     getSocketInstance().to(room).emit(event, payload);
-  } catch {
-    /* socket not initialized in tests / background jobs */
-  }
+  } catch {}
 };
 
 export const getOnlineUsers = (): Set<string> => onlineUsers;

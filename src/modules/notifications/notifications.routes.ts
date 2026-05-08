@@ -2,7 +2,6 @@ import { Router } from "express";
 import { verifyJWT } from "../../middlewares/auth.middleware";
 import * as notificationsController from "./notifications.controller";
 
-// ─── Router ───────────────────────────────────────────────
 const router = Router();
 
 router.get("/", verifyJWT, notificationsController.getNotifications);

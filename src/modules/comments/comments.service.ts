@@ -11,7 +11,6 @@ const COMMENT_INCLUDE = {
   _count: { select: { replies: true } },
 };
 
-// ─── Create root comment ──────────────────────────────────
 export const createComment = async (
   postId: string,
   userId: string,
@@ -56,7 +55,6 @@ export const createComment = async (
   return { comment, commentsCount: updatedPost!.commentsCount };
 };
 
-// ─── Create reply ─────────────────────────────────────────
 export const createReply = async (
   commentId: string,
   userId: string,
@@ -128,7 +126,6 @@ export const createReply = async (
   return { comment: reply, commentsCount: updatedPost!.commentsCount };
 };
 
-// ─── Get comments (root, ASC cursor) ─────────────────────
 export const getComments = async (
   postId: string,
   myId: string,
@@ -169,7 +166,6 @@ export const getComments = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Get replies ──────────────────────────────────────────
 export const getReplies = async (commentId: string, myId: string) => {
   const comment = await prisma.comment.findUnique({ where: { id: commentId } });
   if (!comment) throw new AppError(404, "Bình luận không tồn tại");
@@ -187,7 +183,6 @@ export const getReplies = async (commentId: string, myId: string) => {
   return { replies };
 };
 
-// ─── Update comment ───────────────────────────────────────
 export const updateComment = async (
   commentId: string,
   userId: string,
@@ -215,7 +210,6 @@ export const updateComment = async (
   return { comment: updated };
 };
 
-// ─── Delete comment ───────────────────────────────────────
 export const deleteComment = async (commentId: string, userId: string) => {
   const comment = await prisma.comment.findUnique({
     where: { id: commentId },

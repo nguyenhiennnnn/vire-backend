@@ -111,7 +111,6 @@ export const deleteStory = async (
   }
 };
 
-// Used by /api/users/:id/stories/active (mounted in app.ts)
 export const getActiveStories = async (
   req: AuthRequest,
   res: Response,

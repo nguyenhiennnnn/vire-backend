@@ -56,7 +56,6 @@ export const getFollowStatus = async (
   }
 };
 
-// Used by /api/users/:id/followers (mounted in app.ts)
 export const getFollowers = async (
   req: AuthRequest,
   res: Response,
@@ -76,7 +75,6 @@ export const getFollowers = async (
   }
 };
 
-// Used by /api/users/:id/following (mounted in app.ts)
 export const getFollowing = async (
   req: AuthRequest,
   res: Response,

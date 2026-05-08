@@ -8,7 +8,6 @@ const NOTIF_INCLUDE = {
   fromUser: { select: { id: true, username: true, avatar: true } },
 };
 
-// ─── Internal: create notification + emit ────────────────
 export const createAndEmitNotification = async (params: {
   userId: string; // recipient
   fromUserId: string; // actor
@@ -18,7 +17,6 @@ export const createAndEmitNotification = async (params: {
   friendshipId?: string;
   targetType?: string;
 }) => {
-  // Don't notify self
   if (params.userId === params.fromUserId) return null;
 
   const notification = await prisma.notification.create({
@@ -46,7 +44,6 @@ export const createAndEmitNotification = async (params: {
   return notification;
 };
 
-// ─── Get notifications ────────────────────────────────────
 export const getNotifications = async (
   userId: string,
   cursor?: string,
@@ -89,7 +86,6 @@ export const getNotifications = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Unread count ─────────────────────────────────────────
 export const getUnreadCount = async (userId: string) => {
   const count = await prisma.notification.count({
     where: { userId, isRead: false },
@@ -97,7 +93,6 @@ export const getUnreadCount = async (userId: string) => {
   return { count };
 };
 
-// ─── Mark one read ────────────────────────────────────────
 export const markRead = async (notifId: string, userId: string) => {
   const notif = await prisma.notification.findUnique({
     where: { id: notifId },
@@ -123,7 +118,6 @@ export const markRead = async (notifId: string, userId: string) => {
   return { notification };
 };
 
-// ─── Mark all read ────────────────────────────────────────
 export const markAllRead = async (userId: string) => {
   const result = await prisma.notification.updateMany({
     where: { userId, isRead: false },
@@ -138,7 +132,6 @@ export const markAllRead = async (userId: string) => {
   return { updatedCount: result.count };
 };
 
-// ─── Delete one ───────────────────────────────────────────
 export const deleteNotification = async (notifId: string, userId: string) => {
   const notif = await prisma.notification.findUnique({
     where: { id: notifId },

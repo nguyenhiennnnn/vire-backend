@@ -9,7 +9,6 @@ import { decodeCursor, encodeCursor } from "../../utils/cursor";
 import { AppError } from "../../utils/app-error";
 import { safeEmit } from "../../socket";
 
-// ─── Helper: get story audience (friends + followers) ─────
 const getStoryAudienceIds = async (userId: string): Promise<string[]> => {
   const friendships = await prisma.friendship.findMany({
     where: {
@@ -21,13 +20,11 @@ const getStoryAudienceIds = async (userId: string): Promise<string[]> => {
     },
     select: { senderId: true, receiverId: true },
   });
-  // Story chỉ visible cho bạn bè (theo business rule getActiveStories)
   return friendships.map((f) =>
     f.senderId === userId ? f.receiverId : f.senderId,
   );
 };
 
-// ─── Create story ─────────────────────────────────────────
 export const createStory = async (
   userId: string,
   file: Express.Multer.File,
@@ -73,7 +70,6 @@ export const createStory = async (
 
   safeEmit(`user:${userId}`, "story:you_created", { story: storyPayload });
 
-  // Emit story mới đến bạn bè
   const friendIds = await getStoryAudienceIds(userId);
   for (const friendId of friendIds) {
     safeEmit(`user:${friendId}`, "story:new", { story: storyPayload });
@@ -82,7 +78,6 @@ export const createStory = async (
   return { ok: true, story };
 };
 
-// ─── Feed stories (grouped, only friends, not expired) ────
 export const getFeedStories = async (userId: string) => {
   const friendships = await prisma.friendship.findMany({
     where: {
@@ -113,7 +108,6 @@ export const getFeedStories = async (userId: string) => {
     },
   });
 
-  // Group by user
   const groupMap = new Map<
     string,
     {
@@ -135,7 +129,6 @@ export const getFeedStories = async (userId: string) => {
 
   let storyGroups = Array.from(groupMap.values());
 
-  // Own stories luôn đứng đầu, sau đó sort theo hasUnread
   storyGroups = storyGroups.sort((a, b) => {
     if (a.user.id === userId) return -1;
     if (b.user.id === userId) return 1;
@@ -145,7 +138,6 @@ export const getFeedStories = async (userId: string) => {
   return { storyGroups };
 };
 
-// ─── My stories (all, including expired) ─────────────────
 export const getMyStories = async (
   userId: string,
   cursor?: string,
@@ -190,7 +182,6 @@ export const getMyStories = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Active stories of another user (friends only) ────────
 export const getActiveStories = async (targetId: string, myId: string) => {
   const target = await prisma.user.findUnique({
     where: { id: targetId, isActive: true },
@@ -223,14 +214,12 @@ export const getActiveStories = async (targetId: string, myId: string) => {
   };
 };
 
-// ─── Record view ──────────────────────────────────────────
 export const recordView = async (storyId: string, viewerId: string) => {
   const story = await prisma.story.findUnique({ where: { id: storyId } });
   if (!story) throw new AppError(404, "Story không tồn tại");
   if (story.expiresAt <= new Date())
     throw new AppError(410, "Story đã hết hạn");
 
-  // Owner xem story của mình không cần record
   if (story.userId === viewerId) return { ok: true };
 
   await prisma.storyView.upsert({
@@ -253,7 +242,6 @@ export const recordView = async (storyId: string, viewerId: string) => {
   return { ok: true };
 };
 
-// ─── Get viewers ──────────────────────────────────────────
 export const getViewers = async (storyId: string, userId: string) => {
   const story = await prisma.story.findUnique({ where: { id: storyId } });
   if (!story) throw new AppError(404, "Story không tồn tại");
@@ -274,7 +262,6 @@ export const getViewers = async (storyId: string, userId: string) => {
   };
 };
 
-// ─── Delete story ─────────────────────────────────────────
 export const deleteStory = async (storyId: string, userId: string) => {
   const story = await prisma.story.findUnique({ where: { id: storyId } });
   if (!story) throw new AppError(404, "Story không tồn tại");
@@ -305,8 +292,6 @@ export const deleteStory = async (storyId: string, userId: string) => {
   return { ok: true };
 };
 
-// ─── Expire story (called by background job) ──────────────
-// Server-side job gọi hàm này sau khi xoá story hết hạn
 export const emitStoryExpired = async (
   storyId: string,
   ownerId: string,

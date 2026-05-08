@@ -10,7 +10,6 @@ export const errorMiddleware = (
   res: Response,
   _next: NextFunction,
 ): void => {
-  // Plain { status, message } thrown from services
   if (isAppError(err)) {
     res
       .status(err.status)
@@ -18,7 +17,6 @@ export const errorMiddleware = (
     return;
   }
 
-  // Zod validation errors
   if (err instanceof ZodError) {
     res.status(422).json({
       error: {
@@ -33,7 +31,6 @@ export const errorMiddleware = (
     return;
   }
 
-  // Prisma errors
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === "P2002") {
       res
@@ -49,7 +46,6 @@ export const errorMiddleware = (
     }
   }
 
-  // JWT errors
   if (err instanceof jwt.TokenExpiredError) {
     res
       .status(401)
@@ -63,7 +59,6 @@ export const errorMiddleware = (
     return;
   }
 
-  // Multer / upload errors
   if (err instanceof Error && /file|upload/i.test(err.message)) {
     res
       .status(400)
@@ -71,7 +66,6 @@ export const errorMiddleware = (
     return;
   }
 
-  // Unknown
   if (process.env.NODE_ENV !== "production") {
     console.error("[UnhandledError]", err);
   }

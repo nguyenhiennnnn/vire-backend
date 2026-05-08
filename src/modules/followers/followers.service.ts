@@ -5,7 +5,6 @@ import { AppError } from "../../utils/app-error";
 import { safeEmit } from "../../socket";
 import { createAndEmitNotification } from "../notifications/notifications.service";
 
-// ─── Follow ───────────────────────────────────────────────
 export const follow = async (myId: string, targetId: string) => {
   if (myId === targetId)
     throw new AppError(400, "Không thể tự follow bản thân");
@@ -57,19 +56,16 @@ export const follow = async (myId: string, targetId: string) => {
     }),
   ]);
 
-  // Emit đến target: có follower mới
   safeEmit(`user:${targetId}`, "follow:new_follower", {
     follower: followerUser,
     followersCount: followingUser!.followersCount,
   });
 
-  // Emit về actor: update followingCount
   safeEmit(`user:${myId}`, "follow:following_updated", {
     followingId: targetId,
     followingCount: followerUser!.followingCount,
   });
 
-  // Notification cho target
   await createAndEmitNotification({
     userId: targetId,
     fromUserId: myId,
@@ -79,7 +75,6 @@ export const follow = async (myId: string, targetId: string) => {
   return { message: "Đã theo dõi" };
 };
 
-// ─── Unfollow ─────────────────────────────────────────────
 export const unfollow = async (myId: string, targetId: string) => {
   const existing = await prisma.follower.findUnique({
     where: {
@@ -111,13 +106,11 @@ export const unfollow = async (myId: string, targetId: string) => {
     }),
   ]);
 
-  // Emit đến target: mất một follower
   safeEmit(`user:${targetId}`, "follow:lost_follower", {
     followerId: myId,
     followersCount: targetUser!.followersCount,
   });
 
-  // Emit về actor: update followingCount
   safeEmit(`user:${myId}`, "follow:following_updated", {
     followingId: targetId,
     followingCount: meUser!.followingCount,
@@ -126,7 +119,6 @@ export const unfollow = async (myId: string, targetId: string) => {
   return { message: "Đã bỏ theo dõi" };
 };
 
-// ─── Get followers of :id ─────────────────────────────────
 export const getFollowers = async (
   targetId: string,
   myId: string,
@@ -171,7 +163,6 @@ export const getFollowers = async (
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
 
-  // Batch: check if myId is following each of these followers
   const followerIds = items.map((r) => r.followerId);
   const myFollowings = await prisma.follower.findMany({
     where: { followerId: myId, followingId: { in: followerIds } },
@@ -196,7 +187,6 @@ export const getFollowers = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Get following of :id ─────────────────────────────────
 export const getFollowing = async (
   targetId: string,
   myId: string,
@@ -256,7 +246,6 @@ export const getFollowing = async (
   return { data, nextCursor, hasMore };
 };
 
-// ─── Follow status ────────────────────────────────────────
 export const getFollowStatus = async (myId: string, targetId: string) => {
   const record = await prisma.follower.findUnique({
     where: {

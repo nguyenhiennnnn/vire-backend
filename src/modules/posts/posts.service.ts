@@ -20,7 +20,6 @@ const POST_INCLUDE = (myId: string) => ({
   },
 });
 
-// ─── Check post view permission ───────────────────────────
 export const checkPostPermission = async (
   postId: string,
   myId: string,
@@ -65,7 +64,6 @@ export const checkPostPermission = async (
   return post;
 };
 
-// ─── Helper: resolve audience ids for a post ─────────────
 const resolveAudienceIds = async (
   userId: string,
   privacy: Privacy,
@@ -97,10 +95,9 @@ const resolveAudienceIds = async (
     return [...new Set([...friendIds, ...followerIds])];
   }
 
-  return []; // ONLY_ME → no one else
+  return [];
 };
 
-// ─── Create post ──────────────────────────────────────────
 export const createPost = async (
   userId: string,
   data: { content?: string; mediaUrls?: string[]; privacy: Privacy },
@@ -166,7 +163,6 @@ export const createPost = async (
   return { ok: true, post: postPayload };
 };
 
-// ─── Get feed ─────────────────────────────────────────────
 export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
   const friendships = await prisma.friendship.findMany({
     where: {
@@ -247,7 +243,6 @@ export const getFeed = async (myId: string, cursor?: string, limit = 10) => {
   return { data, nextCursor, hasMore };
 };
 
-// ─── Get post by id ───────────────────────────────────────
 export const getPostById = async (postId: string, myId: string) => {
   await checkPostPermission(postId, myId);
   const post = await prisma.post.findUnique({
@@ -257,7 +252,6 @@ export const getPostById = async (postId: string, myId: string) => {
   return { post };
 };
 
-// ─── Update post ──────────────────────────────────────────
 export const updatePost = async (
   postId: string,
   myId: string,
@@ -306,7 +300,6 @@ export const updatePost = async (
   return { ok: true, post: updated };
 };
 
-// ─── Delete post ──────────────────────────────────────────
 export const deletePost = async (postId: string, myId: string) => {
   const post = await prisma.post.findUnique({ where: { id: postId } });
   if (!post) throw new AppError(404, "Bài viết không tồn tại");
@@ -337,7 +330,6 @@ export const deletePost = async (postId: string, myId: string) => {
   return { ok: true };
 };
 
-// ─── Get user posts ───────────────────────────────────────
 export const getUserPosts = async (
   targetId: string,
   myId: string,

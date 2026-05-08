@@ -25,7 +25,6 @@ const USER_PUBLIC_SELECT = {
   googleId: true,
 };
 
-// ─── Shared: determine friendship status ─────────────────
 export const getFriendshipStatus = async (myId: string, targetId: string) => {
   const friendship = await prisma.friendship.findFirst({
     where: {
@@ -75,7 +74,6 @@ const getUserRelatedCounts = async (userId: string) => {
   };
 };
 
-// ─── Get me ───────────────────────────────────────────────
 export const getMe = async (userId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -85,7 +83,6 @@ export const getMe = async (userId: string) => {
   return { user };
 };
 
-// ─── Update me ────────────────────────────────────────────
 export const updateMe = async (
   userId: string,
   data: { username?: string; bio?: string },
@@ -105,7 +102,6 @@ export const updateMe = async (
   return { user };
 };
 
-// ─── Update avatar ────────────────────────────────────────
 export const updateAvatar = async (
   userId: string,
   file: Express.Multer.File,
@@ -129,7 +125,6 @@ export const updateAvatar = async (
   return { avatarUrl: url };
 };
 
-// ─── Update cover ─────────────────────────────────────────
 export const updateCover = async (
   userId: string,
   file: Express.Multer.File,
@@ -156,7 +151,6 @@ export const updateCover = async (
   return { coverUrl: url };
 };
 
-// ─── Deactivate ───────────────────────────────────────────
 export const deactivate = async (userId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -177,7 +171,6 @@ export const deactivate = async (userId: string) => {
   return { message: "Tài khoản đã được vô hiệu hoá" };
 };
 
-// ─── Delete account ───────────────────────────────────────
 export const deleteAccount = async (userId: string) => {
   const [posts, stories, user, { friendIds, followingIds, followerIds }] =
     await Promise.all([
@@ -228,7 +221,6 @@ export const deleteAccount = async (userId: string) => {
   return { message: "Tài khoản đã được xoá vĩnh viễn" };
 };
 
-// ─── Get user profile ─────────────────────────────────────
 export const getUserProfile = async (targetId: string, myId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: targetId },
@@ -249,7 +241,6 @@ export const getUserProfile = async (targetId: string, myId: string) => {
   return { user, friendshipStatus, isFollowing: !!followerRecord };
 };
 
-// ─── Search users ─────────────────────────────────────────
 export const searchUsers = async (q: string, myId: string) => {
   const users = await prisma.user.findMany({
     where: {
@@ -261,7 +252,6 @@ export const searchUsers = async (q: string, myId: string) => {
     select: USER_PUBLIC_SELECT,
   });
 
-  // Batch fetch friendship status
   const withStatus = await Promise.all(
     users.map(async (u) => ({
       ...u,
